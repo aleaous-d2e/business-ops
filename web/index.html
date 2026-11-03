@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>销售经营分析看板（模拟数据）</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 3v18h18"/><path d="M7 15l4-5 4 3 5-7"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>销售经营分析看板</h1>
+        <span class="brand-sub">SALES OPERATION · BI DASHBOARD</span>
+      </div>
+      <div class="info-tooltip">
+        <span class="info-icon">i</span>
+        <span class="tooltip-text" id="dataMeta">数据加载中…</span>
+      </div>
+    </div>
+    <a class="doc-link" href="#notes">
+      <span>数据口径说明</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14M5 12l7 7 7-7"/>
+      </svg>
+    </a>
+  </div>
+</header>
+
+<main class="container">
+
+  <section class="card filters">
+    <div class="filter-item"><label for="fStart">开始月份</label><input type="month" id="fStart"></div>
+    <div class="filter-item"><label for="fEnd">结束月份</label><input type="month" id="fEnd"></div>
+    <div class="filter-item"><label for="fRegion">区域</label><select id="fRegion"></select></div>
+    <div class="filter-item"><label for="fChannel">渠道</label><select id="fChannel"></select></div>
+    <div class="filter-item"><label for="fCategory">品类</label><select id="fCategory"></select></div>
+    <div class="filter-item filter-actions">
+      <button id="btnReset" class="btn-ghost" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>
+        </svg>
+        重置筛选
+      </button>
+    </div>
+  </section>
+
+  <section class="kpi-grid" id="kpiGrid"></section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title-row">
+        <h2>业绩达成与毛利趋势</h2>
+        <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">观察各月销售额目标完成情况，以及毛利率的健康度波动。</span></div>
+      </div>
+    </div>
+    <div class="chart chart-lg" id="chartTrend"></div>
+  </section>
+
+  <section class="grid-2">
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>区域业绩分布</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">识别各区域对整体销售额的贡献占比。</span></div>
+        </div>
+      </div>
+      <div class="chart" id="chartRegionPie"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>区域目标完成率</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">对比各区目标达成进度，红条表示未达标，需重点关注。</span></div>
+        </div>
+      </div>
+      <div class="chart" id="chartRegionRate"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>品类营收结构</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">分析各品类带来的销售额占比结构。</span></div>
+        </div>
+      </div>
+      <div class="chart" id="chartCategoryPie"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>品类毛利健康度</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">排查低毛利品类，虚线为 20% 健康基准线。</span></div>
+        </div>
+      </div>
+      <div class="chart" id="chartCategoryMargin"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>渠道业绩分析</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">对比各渠道销售额规模与毛利率水位，识别高效与低效渠道。</span></div>
+        </div>
+      </div>
+      <div class="chart" id="chartChannel"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>销售目标达成仪表</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">整体销售完成率；含渠道/品类筛选时目标未拆分，将不计算完成率。</span></div>
+        </div>
+      </div>
+      <div class="chart" id="chartGauge"></div>
+    </div>
+  </section>
+
+  <!-- ========== 经营健康度 ========== -->
+  <section class="grid-2">
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>客户等级业绩结构</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">按客户等级（普通 / 重点 / 战略）拆分销售额与毛利率，判断客户结构是否健康。</span></div>
+        </div>
+      </div>
+      <div class="chart" id="chartCustomerLevel"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>折扣与退款健康度</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">按折扣率与退款率分桶，观察订单集中在哪一档；右移的长尾即风险积压区。</span></div>
+        </div>
+      </div>
+      <div class="chart" id="chartDiscountHealth"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title-row">
+        <h2>渠道 × 品类毛利热力图</h2>
+        <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">交叉聚合毛利率，红色即该渠道下该品类处于毛利告急状态，应优先调整定价或采购成本。</span></div>
+      </div>
+    </div>
+    <div class="chart chart-lg" id="chartChannelCategoryHeat"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title-row">
+        <h2>核心客户表现 TOP10</h2>
+        <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">按销售额排序，标红代表该客户毛利异常或退款率超过 10%。</span></div>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="tblCustomer"></table></div>
+  </section>
+
+  <section class="grid-2">
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>滞销库存预警</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">近 30 天零销量且有库存的 SKU，建议优先清仓以释放资金。</span></div>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="tblSlow"></table></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title-row">
+          <h2>高库存周转天数 TOP10</h2>
+          <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">资金占用时间最长的商品，周转天数大于 90 天需警惕。</span></div>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="tblTurnover"></table></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title-row">
+        <h2>异常订单监控</h2>
+        <div class="info-tooltip card-tooltip"><span class="info-icon">i</span><span class="tooltip-text">命中负毛利、超高折扣（>30%）或高退款（>50%）的订单。</span></div>
+      </div>
+
+      <div class="filter-tabs" id="abnormalTabs">
+        <button class="tab-btn active" data-type="all">全部异常</button>
+        <button class="tab-btn" data-type="负毛利">仅负毛利</button>
+        <button class="tab-btn" data-type="高折扣">仅高折扣</button>
+        <button class="tab-btn" data-type="高退款">仅高退款</button>
+      </div>
+    </div>
+    <div class="table-wrap tall"><table id="tblAbnormal"></table></div>
+  </section>
+
+  <section class="card notes" id="notes">
+    <h2>看板说明与数据口径</h2>
+    <div class="notes-content">
+      <details open>
+        <summary>看板给谁用</summary>
+        <ul class="caliber-list">
+          <li><strong>业务负责人 / 销售总监</strong>：30 秒判断本月销售完成率、哪个区域/品类在拖后腿、毛利是否健康。</li>
+          <li><strong>运营与销售团队</strong>：定位到具体客户和异常订单，作为下周跟进和催款的清单。</li>
+          <li><strong>供应链 / 财务</strong>：监控滞销库存资金占用，以及高退款、负毛利等异常财务风险。</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary>核心指标口径</summary>
+        <ul class="caliber-list">
+          <li><strong>销售额</strong> = 数量 × 单价 × (1 - 折扣)</li>
+          <li><strong>毛利</strong> = 销售额 - 成本；<strong>毛利率</strong> = 毛利 / 销售额</li>
+          <li><strong>销售完成率</strong> = 销售额 / 目标（注：目标仅按“月份×区域”下发，筛选渠道/品类时前端不计算完成率，避免分母失真）</li>
+          <li><strong>异常订单</strong> = 毛利率 &lt; 0 或 折扣 &gt; 30% 或 退款 &gt; 销售额的 50%</li>
+          <li><strong>库存周转天数</strong> = 当前库存 / (近 30 天销量 / 30)</li>
+          <li><strong>折扣分桶</strong>：0-10% / 10-20% / 20-30% / 30-40% / ≥40%；<strong>退款分桶</strong>：无退款 / 0-5% / 5-10% / 10-50% / ≥50%</li>
+        </ul>
+      </details>
+      <p class="data-source">*本页展示为 Python 生成的脱敏模拟数据，不涉及真实商业信息。</p>
+    </div>
+  </section>
+
+  <footer class="footer">销售经营分析看板 · 纯静态演示版</footer>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
