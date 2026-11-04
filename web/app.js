@@ -14,7 +14,7 @@ const STATE = {
 
 const $ = (id) => document.getElementById(id);
 
-/* ---------- 字体 & 颜色 token（全局统一） ---------- */
+/* ---------- 字体 & 颜色 token ---------- */
 const FONT = '"Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif';
 const C_MAIN  = '#0f172a';
 const C_SUB   = '#334155';
@@ -47,6 +47,21 @@ const fmtInt = (v) => (v == null || isNaN(v)) ? '—' : Math.round(v).toLocaleSt
 const fmtNum = (v, digits = 2) => (v == null || isNaN(v)) ? '—'
   : Number(v).toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const monthLabel = (ym) => ym ? ym.replace(/^\d{4}-/, '') + '月' : '';
+
+/* ---------- 通用 UI 片段 ---------- */
+// tooltip 行：左标签 + 右数值
+const tipRow = (label, value) =>
+  `<div style="display:flex;justify-content:space-between;align-items:center;gap:24px;font-size:12px;margin-bottom:5px;color:${C_AUX};">` +
+  `<span style="white-space:nowrap;">${label}</span>` +
+  `<span style="font-weight:600;color:${C_MAIN};font-variant-numeric:tabular-nums;white-space:nowrap;">${value}</span>` +
+  `</div>`;
+
+// ECharts 线性渐变
+const linearGradient = (x1, y1, x2, y2, from, to) =>
+  new echarts.graphic.LinearGradient(x1, y1, x2, y2, [
+    { offset: 0, color: from },
+    { offset: 1, color: to },
+  ]);
 
 /* ---------- KPI 图标 ---------- */
 const ICON = {
@@ -116,6 +131,7 @@ function initFilters() {
     `数据范围：${meta.date_range[0]} ~ ${meta.date_range[1]} ｜ 订单明细 ${meta.order_rows.toLocaleString()} 行 ｜ 脱敏模拟数据`;
 }
 
+// 读取当前筛选条件
 function readFilters() {
   const meta = STATE.dashboard._meta;
   return {
@@ -128,6 +144,7 @@ function readFilters() {
   };
 }
 
+// 按筛选条件过滤订单明细
 function filterFacts(filters) {
   return STATE.facts.filter(r => {
     if (r.ym < filters.start || r.ym > filters.end) return false;
@@ -138,22 +155,15 @@ function filterFacts(filters) {
   });
 }
 
-function targetSumByRegion(filters) {
+// 汇总目标销售额（按 keyFn 分组，默认按区域）
+// 注：目标仅按「月份×区域」下发，渠道/品类维度无目标数据
+function sumTargets(filters, keyFn = t => t.region) {
   const map = {};
   STATE.targetFacts.forEach(t => {
     if (t.ym < filters.start || t.ym > filters.end) return;
     if (filters.region !== 'all' && t.region !== filters.region) return;
-    map[t.region] = (map[t.region] || 0) + t.target_sales;
-  });
-  return map;
-}
-
-function targetSumByMonth(filters) {
-  const map = {};
-  STATE.targetFacts.forEach(t => {
-    if (t.ym < filters.start || t.ym > filters.end) return;
-    if (filters.region !== 'all' && t.region !== filters.region) return;
-    map[t.ym] = (map[t.ym] || 0) + t.target_sales;
+    const key = keyFn(t);
+    map[key] = (map[key] || 0) + t.target_sales;
   });
   return map;
 }
@@ -161,6 +171,7 @@ function targetSumByMonth(filters) {
 /* ============================================================
  * 核心计算
  * ============================================================ */
+// 计算视图数据：KPI、月度趋势、区域/品类/渠道/客户聚合、分桶、矩阵、异常订单
 function computeView(filters) {
   const facts = filterFacts(filters);
   const completionDisabled = filters.channel !== 'all' || filters.category !== 'all';
@@ -175,7 +186,7 @@ function computeView(filters) {
   const aov = orderCount > 0 ? sales / orderCount : 0;
   const gm = sales > 0 ? gp / sales : 0;
   const rr = sales > 0 ? refund / sales : 0;
-  const regionTargets = targetSumByRegion(filters);
+  const regionTargets = sumTargets(filters);
   const targetSum = Object.values(regionTargets).reduce((a, b) => a + b, 0);
   const completion = (completionDisabled || targetSum <= 0) ? null : sales / targetSum;
 
@@ -186,7 +197,8 @@ function computeView(filters) {
     monthMap[r.ym].sales += (r.sales || 0);
     monthMap[r.ym].gp += (r.sales || 0) - (r.cost_amount || 0);
   });
-  const monthTargets = targetSumByMonth(filters);
+  // 渠道/品类筛选时目标未拆分，趋势图不显示目标线
+  const monthTargets = completionDisabled ? {} : sumTargets(filters, t => t.ym);
   const trend = Object.keys(monthMap).sort().map(m => ({
     ym: m, sales: monthMap[m].sales, gross_profit: monthMap[m].gp,
     gross_margin: monthMap[m].sales > 0 ? monthMap[m].gp / monthMap[m].sales : 0,
@@ -303,11 +315,11 @@ function computeView(filters) {
 
   /* 退款分桶 */
   const REFUND_BINS = [
-    { key: '无退款',    test: v => v === 0 },
-    { key: '0-5%',     test: v => v > 0 && v <= 0.05 },
-    { key: '5-10%',    test: v => v > 0.05 && v <= 0.10 },
-    { key: '10-50%',   test: v => v > 0.10 && v <= 0.50 },
-    { key: '≥50%',     test: v => v > 0.50 },
+    { key: '无退款',  test: v => v === 0 },
+    { key: '0-5%',   test: v => v > 0 && v <= 0.05 },
+    { key: '5-10%',  test: v => v > 0.05 && v <= 0.10 },
+    { key: '10-50%', test: v => v > 0.10 && v <= 0.50 },
+    { key: '≥50%',   test: v => v > 0.50 },
   ];
   const refundBuckets = REFUND_BINS.map(b => ({ label: b.key, count: 0, sales: 0 }));
   facts.forEach(r => {
@@ -376,18 +388,15 @@ function computeView(filters) {
 /* ============================================================
  * 图表基础设施
  * ============================================================ */
+// 获取或初始化 ECharts 实例（按容器 id 缓存）
 function chart(id) {
-  if (!STATE.charts[id]) {
-    const el = $(id);
-    if (!el) return null;
-    STATE.charts[id] = echarts.init(el);
-  }
+  if (!STATE.charts[id]) STATE.charts[id] = echarts.init($(id));
   return STATE.charts[id];
 }
 
+// 在指定图表中显示空状态提示
 function emptyChart(id, text = '当前筛选下无数据') {
   const c = chart(id);
-  if (!c) return;
   c.clear();
   c.setOption({
     graphic: [{
@@ -400,6 +409,7 @@ function emptyChart(id, text = '当前筛选下无数据') {
 /* ============================================================
  * KPI 卡片
  * ============================================================ */
+// 渲染 6 个 KPI 卡片
 function renderKpi(k) {
   const cards = [
     { label: '销售额', icon: ICON.sales, value: '¥' + fmtMoney(k.sales), sub: `目标 ¥${fmtMoney(k.target_sales)}`, accent: 'blue' },
@@ -431,6 +441,7 @@ function renderKpi(k) {
 /* ============================================================
  * 趋势图
  * ============================================================ */
+// 渲染销售额 / 目标 / 毛利率趋势图
 function renderTrend(trend) {
   if (!trend.length) return emptyChart('chartTrend');
   const c = chart('chartTrend');
@@ -440,12 +451,8 @@ function renderTrend(trend) {
   const targetArr = trend.map(t => t.target_sales > 0 ? +t.target_sales.toFixed(2) : null);
   const showTarget = targetArr.some(v => v != null);
 
-  const barGradient = new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-    { offset: 0, color: '#3b82f6' }, { offset: 1, color: 'rgba(59,130,246,.10)' }
-  ]);
-  const areaGradient = new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-    { offset: 0, color: 'rgba(217,119,6,.20)' }, { offset: 1, color: 'rgba(217,119,6,.01)' }
-  ]);
+  const barGradient = linearGradient(0, 0, 0, 1, '#3b82f6', 'rgba(59,130,246,.10)');
+  const areaGradient = linearGradient(0, 0, 0, 1, 'rgba(217,119,6,.20)', 'rgba(217,119,6,.01)');
 
   c.clear();
   c.setOption({
@@ -471,7 +478,7 @@ function renderTrend(trend) {
     xAxis: { type: 'category', data: months, axisLabel: { ...AXIS_LABEL, margin: 12 }, axisLine: AXIS_LINE, axisTick: { show: false } },
     yAxis: [
       { type: 'value', axisLabel: { formatter: v => fmtMoney(v, 0), ...AXIS_LABEL }, splitLine: SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
-      { type: 'value', min: 0, axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
+      { type: 'value', axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
     ],
     series: [
       { name: '销售额', type: 'bar', data: salesArr, barWidth: '26%', showBackground: true, backgroundStyle: { color: 'rgba(37,99,235,.05)', borderRadius: [5, 5, 0, 0] }, itemStyle: { color: barGradient, borderRadius: [5, 5, 0, 0] } },
@@ -483,29 +490,25 @@ function renderTrend(trend) {
 }
 
 /* ============================================================
- * 区域分布环形图
+ * 环形图（区域 / 品类共用）
  * ============================================================ */
-function renderRegionPie(regions) {
-  if (!regions.length) return emptyChart('chartRegionPie');
-  const c = chart('chartRegionPie');
-  const totalSales = regions.reduce((sum, r) => sum + r.sales, 0);
+// 渲染通用环形图
+function renderDonut(id, items) {
+  if (!items.length) return emptyChart(id);
+  const c = chart(id);
+  const total = items.reduce((s, x) => s + x.value, 0);
 
   c.clear();
   c.setOption({
     textStyle: { fontFamily: FONT },
     color: PALETTE,
-    tooltip: {
-      ...TOOLTIP_STYLE, trigger: 'item',
-      formatter: (p) => `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${p.name}</div>
-                         <div style="color:${C_AUX};font-size:12px;">销售额：<span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">¥${fmtNum(p.value, 2)}</span></div>
-                         <div style="color:${C_AUX};font-size:12px;">占比：<span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">${fmtPct(p.data.share)}</span></div>`
-    },
+    tooltip: { ...TOOLTIP_STYLE, trigger: 'item', formatter: (p) => p.data.tooltipHtml },
     legend: { bottom: 0, icon: 'circle', itemWidth: 8, itemHeight: 8, itemGap: 14, textStyle: { color: C_SUB, fontSize: 12, fontWeight: 500, fontFamily: FONT } },
     graphic: {
       type: 'group', left: 'center', top: 'center',
       children: [
         { type: 'text', style: { text: '总销售额', fontSize: 12, fontWeight: 500, fill: C_FAINT, textAlign: 'center', fontFamily: FONT }, top: -18 },
-        { type: 'text', style: { text: '¥' + fmtMoney(totalSales), fontSize: 19, fontWeight: 700, fill: C_MAIN, textAlign: 'center', fontFamily: FONT }, top: 4 },
+        { type: 'text', style: { text: '¥' + fmtMoney(total), fontSize: 19, fontWeight: 700, fill: C_MAIN, textAlign: 'center', fontFamily: FONT }, top: 4 },
       ],
     },
     series: [{
@@ -519,60 +522,41 @@ function renderRegionPie(regions) {
         },
       },
       labelLine: { length: 10, length2: 10, lineStyle: { color: C_LINE, width: 1 } },
-      data: regions.map(r => ({ name: r.region, value: +r.sales.toFixed(2), share: r.sales_share })),
+      data: items,
       emphasis: { scale: true, scaleSize: 6 },
     }],
     animationDuration: 900, animationEasing: 'cubicOut',
   });
 }
 
-/* ============================================================
- * 品类结构环形图
- * ============================================================ */
-function renderCategoryPie(categories) {
-  if (!categories.length) return emptyChart('chartCategoryPie');
-  const c = chart('chartCategoryPie');
-  const totalSales = categories.reduce((sum, c) => sum + c.sales, 0);
+// 区域业绩分布环形图
+function renderRegionPie(regions) {
+  renderDonut('chartRegionPie', regions.map(r => ({
+    name: r.region,
+    value: +r.sales.toFixed(2),
+    tooltipHtml:
+      `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${r.region}</div>` +
+      tipRow('销售额', '¥' + fmtNum(r.sales, 2)) +
+      tipRow('占比', fmtPct(r.sales_share)),
+  })));
+}
 
-  c.clear();
-  c.setOption({
-    textStyle: { fontFamily: FONT },
-    color: PALETTE,
-    tooltip: {
-      ...TOOLTIP_STYLE, trigger: 'item',
-      formatter: (p) => `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${p.name}</div>
-                         <div style="color:${C_AUX};font-size:12px;">销售额：<span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">¥${fmtNum(p.value, 2)}</span></div>
-                         <div style="color:${C_AUX};font-size:12px;">毛利率：<span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">${fmtPct(p.data.gm)}</span></div>`
-    },
-    legend: { bottom: 0, icon: 'circle', itemWidth: 8, itemHeight: 8, itemGap: 14, textStyle: { color: C_SUB, fontSize: 12, fontWeight: 500, fontFamily: FONT } },
-    graphic: {
-      type: 'group', left: 'center', top: 'center',
-      children: [
-        { type: 'text', style: { text: '总销售额', fontSize: 12, fontWeight: 500, fill: C_FAINT, textAlign: 'center', fontFamily: FONT }, top: -18 },
-        { type: 'text', style: { text: '¥' + fmtMoney(totalSales), fontSize: 19, fontWeight: 700, fill: C_MAIN, textAlign: 'center', fontFamily: FONT }, top: 4 },
-      ],
-    },
-    series: [{
-      type: 'pie', radius: ['52%', '74%'], center: ['50%', '48%'],
-      itemStyle: { borderColor: '#fff', borderWidth: 2.5 },
-      label: {
-        show: true, position: 'outside', formatter: '{name|{b}}\n{percent|{d}%}',
-        rich: {
-          name: { fontSize: 12, fontWeight: 500, color: C_AUX, padding: [0, 0, 3, 0], fontFamily: FONT },
-          percent: { fontSize: 13, fontWeight: 700, color: C_MAIN, fontFamily: FONT },
-        },
-      },
-      labelLine: { length: 10, length2: 10, lineStyle: { color: C_LINE, width: 1 } },
-      data: categories.map(cat => ({ name: cat.category, value: +cat.sales.toFixed(2), gm: cat.gross_margin })),
-      emphasis: { scale: true, scaleSize: 6 },
-    }],
-    animationDuration: 900, animationEasing: 'cubicOut',
-  });
+// 品类营收结构环形图
+function renderCategoryPie(categories) {
+  renderDonut('chartCategoryPie', categories.map(cat => ({
+    name: cat.category,
+    value: +cat.sales.toFixed(2),
+    tooltipHtml:
+      `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${cat.category}</div>` +
+      tipRow('销售额', '¥' + fmtNum(cat.sales, 2)) +
+      tipRow('毛利率', fmtPct(cat.gross_margin)),
+  })));
 }
 
 /* ============================================================
  * 区域完成率横条
  * ============================================================ */
+// 渲染区域目标完成率横向条形图
 function renderRegionRate(regions, disabled) {
   if (disabled) return emptyChart('chartRegionRate', '含渠道/品类筛选\n目标未拆解，完成率不可比');
   const valid = regions.filter(r => r.completion_rate != null);
@@ -580,12 +564,14 @@ function renderRegionRate(regions, disabled) {
 
   const c = chart('chartRegionRate');
   const sorted = [...valid].sort((a, b) => a.completion_rate - b.completion_rate);
+  const maxRate = Math.max(1, ...sorted.map(r => r.completion_rate));
+  const axisMax = Math.max(1.2, Math.ceil(maxRate * 10) / 10 + 0.1);
 
   const getColor = (rate) => {
     let start = '#dc2626', end = '#fca5a5';
     if (rate >= 1) { start = '#2563eb'; end = '#93c5fd'; }
     else if (rate >= 0.9) { start = '#d97706'; end = '#fcd34d'; }
-    return new echarts.graphic.LinearGradient(1, 0, 0, 0, [{ offset: 0, color: start }, { offset: 1, color: end }]);
+    return linearGradient(1, 0, 0, 0, start, end);
   };
 
   c.clear();
@@ -593,12 +579,13 @@ function renderRegionRate(regions, disabled) {
     textStyle: { fontFamily: FONT },
     tooltip: {
       ...TOOLTIP_STYLE, trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(37,99,235,.06)' } },
-      formatter: (p) => `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${p[0].name}</div>
-                         <div style="color:${C_AUX};font-size:12px;">完成率：<span style="font-weight:600;color:${C_MAIN};">${fmtPct(p[0].data.value)}</span></div>
-                         <div style="color:${C_AUX};font-size:12px;">实际：¥${fmtMoney(p[0].data.actual)} / 目标：¥${fmtMoney(p[0].data.target)}</div>`
+      formatter: (p) =>
+        `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${p[0].name}</div>` +
+        tipRow('完成率', fmtPct(p[0].data.value)) +
+        tipRow('实际 / 目标', `¥${fmtMoney(p[0].data.actual)} / ¥${fmtMoney(p[0].data.target)}`),
     },
     grid: { left: 10, right: 78, top: 10, bottom: 10, containLabel: true },
-    xAxis: { type: 'value', max: 1.2, axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
+    xAxis: { type: 'value', max: axisMax, axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
     yAxis: { type: 'category', data: sorted.map(r => r.region), axisLabel: { color: C_SUB, fontWeight: 600, fontSize: 12.5, fontFamily: FONT }, axisLine: { show: false }, axisTick: { show: false } },
     series: [{
       type: 'bar', barWidth: '42%',
@@ -618,16 +605,19 @@ function renderRegionRate(regions, disabled) {
 /* ============================================================
  * 品类毛利横条
  * ============================================================ */
+// 渲染品类毛利率横向条形图
 function renderCategoryMargin(categories) {
   if (!categories.length) return emptyChart('chartCategoryMargin');
   const c = chart('chartCategoryMargin');
   const sorted = [...categories].sort((a, b) => a.gross_margin - b.gross_margin);
+  const maxGm = Math.max(0.2, ...sorted.map(x => x.gross_margin));
+  const axisMax = Math.ceil(maxGm * 20) / 20 + 0.05;
 
   const getColor = (gm) => {
     let start = '#dc2626', end = '#fca5a5';
     if (gm >= 0.22) { start = '#15803d'; end = '#6ee7b7'; }
     else if (gm >= 0.15) { start = '#d97706'; end = '#fcd34d'; }
-    return new echarts.graphic.LinearGradient(1, 0, 0, 0, [{ offset: 0, color: start }, { offset: 1, color: end }]);
+    return linearGradient(1, 0, 0, 0, start, end);
   };
 
   c.clear();
@@ -635,12 +625,13 @@ function renderCategoryMargin(categories) {
     textStyle: { fontFamily: FONT },
     tooltip: {
       ...TOOLTIP_STYLE, trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(37,99,235,.06)' } },
-      formatter: (p) => `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${p[0].name}</div>
-                         <div style="color:${C_AUX};font-size:12px;">毛利率：<span style="font-weight:600;color:${C_MAIN};">${fmtPct(p[0].data.value)}</span></div>
-                         <div style="color:${C_AUX};font-size:12px;">毛利：¥${fmtMoney(p[0].data.gp)} / 销售额：¥${fmtMoney(p[0].data.sales)}</div>`
+      formatter: (p) =>
+        `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${p[0].name}</div>` +
+        tipRow('毛利率', fmtPct(p[0].data.value)) +
+        tipRow('毛利 / 销售额', `¥${fmtMoney(p[0].data.gp)} / ¥${fmtMoney(p[0].data.sales)}`),
     },
     grid: { left: 10, right: 78, top: 10, bottom: 10, containLabel: true },
-    xAxis: { type: 'value', max: 0.4, axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
+    xAxis: { type: 'value', max: axisMax, axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
     yAxis: { type: 'category', data: sorted.map(c => c.category), axisLabel: { color: C_SUB, fontWeight: 600, fontSize: 12.5, fontFamily: FONT }, axisLine: { show: false }, axisTick: { show: false } },
     series: [{
       type: 'bar', barWidth: '42%',
@@ -660,6 +651,7 @@ function renderCategoryMargin(categories) {
 /* ============================================================
  * 渠道业绩分析
  * ============================================================ */
+// 渲染渠道销售额 + 毛利率组合图
 function renderChannel(channels) {
   if (!channels.length) return emptyChart('chartChannel');
   const c = chart('chartChannel');
@@ -667,10 +659,7 @@ function renderChannel(channels) {
   const names = channels.map(x => x.channel);
   const salesArr = channels.map(x => +x.sales.toFixed(2));
   const gmArr = channels.map(x => x.sales > 0 ? +x.gross_margin.toFixed(4) : null);
-
-  const barGradient = new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-    { offset: 0, color: '#6d28d9' }, { offset: 1, color: 'rgba(109,40,217,.10)' }
-  ]);
+  const barGradient = linearGradient(0, 0, 0, 1, '#6d28d9', 'rgba(109,40,217,.10)');
 
   c.clear();
   c.setOption({
@@ -679,12 +668,11 @@ function renderChannel(channels) {
       ...TOOLTIP_STYLE, trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(109,40,217,.06)' } },
       formatter: (params) => {
         const item = channels.find(x => x.channel === params[0].axisValue);
-        if (!item) return '';
-        return `<div style="font-weight:600;font-size:13px;margin-bottom:8px;color:${C_MAIN};">${item.channel}</div>
-          <div style="display:flex;justify-content:space-between;gap:24px;font-size:12px;margin-bottom:5px;color:${C_AUX};"><span>销售额</span><span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">¥${fmtNum(item.sales, 2)}</span></div>
-          <div style="display:flex;justify-content:space-between;gap:24px;font-size:12px;margin-bottom:5px;color:${C_AUX};"><span>毛利率</span><span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">${fmtPct(item.gross_margin)}</span></div>
-          <div style="display:flex;justify-content:space-between;gap:24px;font-size:12px;margin-bottom:5px;color:${C_AUX};"><span>订单数</span><span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">${fmtInt(item.order_count)}</span></div>
-          <div style="display:flex;justify-content:space-between;gap:24px;font-size:12px;color:${C_AUX};"><span>销售占比</span><span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">${fmtPct(item.sales_share)}</span></div>`;
+        return `<div style="font-weight:600;font-size:13px;margin-bottom:8px;color:${C_MAIN};">${item.channel}</div>` +
+          tipRow('销售额', '¥' + fmtNum(item.sales, 2)) +
+          tipRow('毛利率', fmtPct(item.gross_margin)) +
+          tipRow('订单数', fmtInt(item.order_count)) +
+          tipRow('销售占比', fmtPct(item.sales_share));
       },
     },
     legend: { top: 0, left: 0, icon: 'circle', itemWidth: 8, itemHeight: 8, itemGap: 16, textStyle: { color: C_SUB, fontSize: 12, fontWeight: 500, fontFamily: FONT }, data: ['销售额', '毛利率'] },
@@ -692,7 +680,7 @@ function renderChannel(channels) {
     xAxis: { type: 'category', data: names, axisLabel: { ...AXIS_LABEL, margin: 12 }, axisLine: AXIS_LINE, axisTick: { show: false } },
     yAxis: [
       { type: 'value', axisLabel: { formatter: v => fmtMoney(v, 0), ...AXIS_LABEL }, splitLine: SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
-      { type: 'value', min: 0, axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
+      { type: 'value', axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
     ],
     series: [
       { name: '销售额', type: 'bar', data: salesArr, barWidth: '34%', showBackground: true, backgroundStyle: { color: 'rgba(109,40,217,.05)', borderRadius: [5, 5, 0, 0] }, itemStyle: { color: barGradient, borderRadius: [5, 5, 0, 0] } },
@@ -705,6 +693,7 @@ function renderChannel(channels) {
 /* ============================================================
  * 目标达成仪表盘
  * ============================================================ */
+// 渲染销售完成率仪表盘
 function renderGauge(rate, actual, target, disabled) {
   if (disabled) return emptyChart('chartGauge', '含渠道/品类筛选\n目标未拆解，完成率不可计算');
   if (rate == null || !target || target <= 0) return emptyChart('chartGauge', '目标数据缺失');
@@ -721,7 +710,7 @@ function renderGauge(rate, actual, target, disabled) {
       type: 'gauge',
       startAngle: 215, endAngle: -35,
       min: 0, max: axisMax, radius: '86%', center: ['50%', '56%'],
-      progress: { show: true, roundCap: true, width: 16, itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: colorStart }, { offset: 1, color: colorEnd }]) } },
+      progress: { show: true, roundCap: true, width: 16, itemStyle: { color: linearGradient(0, 0, 1, 0, colorStart, colorEnd) } },
       axisLine: { roundCap: true, lineStyle: { width: 16, color: [[1, '#eef2f7']] } },
       pointer: { show: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, anchor: { show: false }, title: { show: false },
       detail: { valueAnimation: true, offsetCenter: [0, '-14%'], formatter: v => fmtPct(v), fontSize: 32, fontWeight: 700, color: C_MAIN, fontFamily: FONT },
@@ -738,10 +727,10 @@ function renderGauge(rate, actual, target, disabled) {
 /* ============================================================
  * 客户等级业绩结构
  * ============================================================ */
+// 渲染客户等级销售额 + 毛利率图
 function renderCustomerLevel(levels) {
-  if (!levels || !levels.length) return emptyChart('chartCustomerLevel');
+  if (!levels.length) return emptyChart('chartCustomerLevel');
   const c = chart('chartCustomerLevel');
-
   const levelColor = { '战略': '#6d28d9', '重点': '#2563eb', '普通': '#0e7490', '未分级': '#64748b' };
 
   c.clear();
@@ -751,28 +740,12 @@ function renderCustomerLevel(levels) {
       ...TOOLTIP_STYLE, trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(37,99,235,.06)' } },
       formatter: (params) => {
         const item = levels.find(x => x.level === params[0].axisValue);
-        if (!item) return '';
-        return `<div style="font-weight:600;font-size:13px;margin-bottom:8px;color:${C_MAIN};">${item.level}客户</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:32px;font-size:12px;margin-bottom:5px;color:${C_AUX};">
-            <span style="white-space:nowrap;">销售额</span>
-            <span style="font-weight:600;color:${C_MAIN};font-variant-numeric:tabular-nums;white-space:nowrap;">¥${fmtNum(item.sales, 2)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:32px;font-size:12px;margin-bottom:5px;color:${C_AUX};">
-            <span style="white-space:nowrap;">销售占比</span>
-            <span style="font-weight:600;color:${C_MAIN};font-variant-numeric:tabular-nums;white-space:nowrap;">${fmtPct(item.sales_share)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:32px;font-size:12px;margin-bottom:5px;color:${C_AUX};">
-            <span style="white-space:nowrap;">毛利率</span>
-            <span style="font-weight:600;color:${C_MAIN};font-variant-numeric:tabular-nums;white-space:nowrap;">${fmtPct(item.gross_margin)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:32px;font-size:12px;margin-bottom:5px;color:${C_AUX};">
-            <span style="white-space:nowrap;">客户数</span>
-            <span style="font-weight:600;color:${C_MAIN};font-variant-numeric:tabular-nums;white-space:nowrap;">${fmtInt(item.customer_count)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:32px;font-size:12px;color:${C_AUX};">
-            <span style="white-space:nowrap;">户均贡献</span>
-            <span style="font-weight:600;color:${C_MAIN};font-variant-numeric:tabular-nums;white-space:nowrap;">¥${fmtMoney(item.aov)}</span>
-          </div>`;
+        return `<div style="font-weight:600;font-size:13px;margin-bottom:8px;color:${C_MAIN};">${item.level}客户</div>` +
+          tipRow('销售额', '¥' + fmtNum(item.sales, 2)) +
+          tipRow('销售占比', fmtPct(item.sales_share)) +
+          tipRow('毛利率', fmtPct(item.gross_margin)) +
+          tipRow('客户数', fmtInt(item.customer_count)) +
+          tipRow('户均贡献', '¥' + fmtMoney(item.aov));
       },
     },
     legend: { top: 0, left: 0, icon: 'circle', itemWidth: 8, itemHeight: 8, itemGap: 16, textStyle: { color: C_SUB, fontSize: 12, fontWeight: 500, fontFamily: FONT }, data: ['销售额', '毛利率'] },
@@ -780,7 +753,7 @@ function renderCustomerLevel(levels) {
     xAxis: { type: 'category', data: levels.map(l => l.level), axisLabel: { ...AXIS_LABEL, margin: 12 }, axisLine: AXIS_LINE, axisTick: { show: false } },
     yAxis: [
       { type: 'value', axisLabel: { formatter: v => fmtMoney(v, 0), ...AXIS_LABEL }, splitLine: SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
-      { type: 'value', min: 0, axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
+      { type: 'value', axisLabel: { formatter: v => (v * 100).toFixed(0) + '%', ...AXIS_LABEL }, splitLine: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
     ],
     series: [
       {
@@ -801,55 +774,43 @@ function renderCustomerLevel(levels) {
 }
 
 /* ============================================================
- * 折扣与退款健康度分布
+ * 分桶柱状图（折扣 / 退款共用）
  * ============================================================ */
-function renderDiscountHealth(discountBuckets, refundBuckets) {
-  if ((!discountBuckets || !discountBuckets.length) && (!refundBuckets || !refundBuckets.length)) {
-    return emptyChart('chartDiscountHealth');
-  }
-  const c = chart('chartDiscountHealth');
-
-  const labels = [...new Set([...discountBuckets.map(b => b.label), ...refundBuckets.map(b => b.label)])];
-  const discountLookup = Object.fromEntries(discountBuckets.map(b => [b.label, b.count]));
-  const refundLookup   = Object.fromEntries(refundBuckets.map(b => [b.label, b.count]));
+// 渲染单维度分桶柱状图
+function renderBuckets(id, buckets, seriesName, fromColor, toColor) {
+  if (!buckets.length) return emptyChart(id);
+  const c = chart(id);
 
   c.clear();
   c.setOption({
     textStyle: { fontFamily: FONT },
     tooltip: {
       ...TOOLTIP_STYLE, trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(37,99,235,.06)' } },
+      formatter: (params) =>
+        `<div style="font-weight:600;color:${C_MAIN};margin-bottom:5px;">${params[0].axisValue}</div>` +
+        tipRow('订单数', fmtInt(params[0].value)),
     },
-    legend: { top: 0, left: 'center', icon: 'circle', itemWidth: 8, itemHeight: 8, itemGap: 16, textStyle: { color: C_SUB, fontSize: 12, fontWeight: 500, fontFamily: FONT }, data: ['折扣分桶', '退款分桶'] },
-    grid: { left: 10, right: 15, top: 46, bottom: 10, containLabel: true },
-    xAxis: { type: 'category', data: labels, axisLabel: { ...AXIS_LABEL, margin: 12, interval: 0 }, axisLine: AXIS_LINE, axisTick: { show: false } },
+    grid: { left: 10, right: 15, top: 16, bottom: 10, containLabel: true },
+    xAxis: { type: 'category', data: buckets.map(b => b.label), axisLabel: { ...AXIS_LABEL, margin: 12, interval: 0 }, axisLine: AXIS_LINE, axisTick: { show: false } },
     yAxis: { type: 'value', axisLabel: { ...AXIS_LABEL }, splitLine: SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
-    series: [
-      {
-        name: '折扣分桶', type: 'bar', barWidth: '32%',
-        data: labels.map(l => ({
-          value: discountLookup[l] || 0,
-          itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#2563eb' }, { offset: 1, color: 'rgba(37,99,235,.15)' }]), borderRadius: [5, 5, 0, 0] },
-        })),
-      },
-      {
-        name: '退款分桶', type: 'bar', barWidth: '32%',
-        data: labels.map(l => ({
-          value: refundLookup[l] || 0,
-          itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#dc2626' }, { offset: 1, color: 'rgba(220,38,38,.15)' }]), borderRadius: [5, 5, 0, 0] },
-        })),
-      },
-    ],
-    animationDuration: 900, animationEasing: 'cubicOut',
+    series: [{
+      name: seriesName, type: 'bar', barWidth: '46%',
+      data: buckets.map(b => ({
+        value: b.count,
+        itemStyle: { color: linearGradient(0, 0, 0, 1, fromColor, toColor), borderRadius: [5, 5, 0, 0] },
+      })),
+    }],
+    animationDuration: 800, animationEasing: 'cubicOut',
   });
 }
 
 /* ============================================================
  * 渠道 × 品类 毛利热力图
  * ============================================================ */
+// 渲染渠道 × 品类毛利率热力图
 function renderChannelCategoryHeat(matrix) {
-  if (!matrix || !matrix.data.length) return emptyChart('chartChannelCategoryHeat');
+  if (!matrix.data.length) return emptyChart('chartChannelCategoryHeat');
   const c = chart('chartChannelCategoryHeat');
-
   const { channels, categories, data, min, max } = matrix;
 
   c.clear();
@@ -857,12 +818,10 @@ function renderChannelCategoryHeat(matrix) {
     textStyle: { fontFamily: FONT },
     tooltip: {
       ...TOOLTIP_STYLE, trigger: 'item',
-      formatter: (p) => {
-        const v = p.data;
-        return `<div style="font-weight:600;font-size:13px;margin-bottom:6px;color:${C_MAIN};">${v.ch} · ${v.cat}</div>
-                <div style="color:${C_AUX};font-size:12px;margin-bottom:4px;">毛利率：<span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">${fmtPct(v.value[2])}</span></div>
-                <div style="color:${C_AUX};font-size:12px;">销售额：<span style="font-weight:600;color:${C_MAIN};white-space:nowrap;">¥${fmtNum(v.sales, 2)}</span></div>`;
-      },
+      formatter: (p) =>
+        `<div style="font-weight:600;font-size:13px;margin-bottom:6px;color:${C_MAIN};">${p.data.ch} · ${p.data.cat}</div>` +
+        tipRow('毛利率', fmtPct(p.data.value[2])) +
+        tipRow('销售额', '¥' + fmtNum(p.data.sales, 2)),
     },
     grid: { left: 10, right: 24, top: 16, bottom: 60, containLabel: true },
     xAxis: {
@@ -878,7 +837,7 @@ function renderChannelCategoryHeat(matrix) {
     visualMap: {
       min: Math.min(min, 0), max: Math.max(max, 0.3),
       calculable: false, orient: 'horizontal', left: 'center', bottom: 8,
-      itemWidth: 12, itemHeight: 120,
+      itemWidth: 120, itemHeight: 12,
       text: ['高毛利', '低毛利'],
       textStyle: { color: C_AUX, fontWeight: 500, fontSize: 11.5, fontFamily: FONT },
       inRange: { color: ['#dc2626', '#f59e0b', '#fbbf24', '#86efac', '#16a34a'] },
@@ -902,10 +861,11 @@ function renderChannelCategoryHeat(matrix) {
 /* ============================================================
  * 客户表
  * ============================================================ */
+// 渲染核心客户 TOP10 表格
 function renderCustomerTable(customers) {
   if (!customers.length) {
     $('tblCustomer').innerHTML =
-      '<thead><tr><th>#</th><th>客户</th><th class="num">销售额</th></tr></thead>' +
+      '<thead><tr><th>#</th><th>客户名称</th><th>等级</th><th>区域</th><th class="num">销售额</th><th class="num">毛利</th><th class="num">毛利率</th><th class="num">退款率</th></tr></thead>' +
       '<tbody><tr><td colspan="8" class="empty">当前筛选下无客户数据</td></tr></tbody>';
     return;
   }
@@ -931,10 +891,11 @@ function renderCustomerTable(customers) {
 /* ============================================================
  * 库存表
  * ============================================================ */
+// 渲染滞销库存与高周转天数表格
 function renderInventory(filters) {
   const dash = STATE.dashboard.inventoryWarning;
-  let slow = dash.slowMoving || [];
-  let turnover = dash.turnoverTop || [];
+  let slow = dash.slowMoving;
+  let turnover = dash.turnoverTop;
   if (filters.category !== 'all') {
     slow = slow.filter(x => x.category === filters.category);
     turnover = turnover.filter(x => x.category === filters.category);
@@ -942,7 +903,7 @@ function renderInventory(filters) {
 
   if (!slow.length) {
     $('tblSlow').innerHTML =
-      '<thead><tr><th>SKU</th><th>商品</th><th class="num">库存</th></tr></thead>' +
+      '<thead><tr><th>SKU 编码</th><th>商品名称</th><th>品类</th><th class="num">当前库存</th><th class="num">近30天销量</th></tr></thead>' +
       '<tbody><tr><td colspan="5" class="empty">当前筛选下无滞销 SKU</td></tr></tbody>';
   } else {
     $('tblSlow').innerHTML = `
@@ -956,7 +917,7 @@ function renderInventory(filters) {
 
   if (!turnover.length) {
     $('tblTurnover').innerHTML =
-      '<thead><tr><th>SKU</th><th>商品</th><th class="num">周转天数</th></tr></thead>' +
+      '<thead><tr><th>SKU 编码</th><th>商品名称</th><th>品类</th><th class="num">库存</th><th class="num">近30天销量</th><th class="num">周转天数</th></tr></thead>' +
       '<tbody><tr><td colspan="6" class="empty">当前筛选下无数据</td></tr></tbody>';
   } else {
     $('tblTurnover').innerHTML = `
@@ -973,10 +934,11 @@ function renderInventory(filters) {
 /* ============================================================
  * 异常订单表
  * ============================================================ */
+// 渲染异常订单表格（最多展示前 100 条）
 function renderAbnormal(rows) {
   if (!rows.length) {
     $('tblAbnormal').innerHTML =
-      '<thead><tr><th>订单号</th><th>客户</th><th class="num">销售额</th><th class="num">毛利率</th><th>异常原因</th></tr></thead>' +
+      '<thead><tr><th>订单号</th><th>月份</th><th>客户名称</th><th>区域</th><th>渠道</th><th>品类</th><th class="num">销售额</th><th class="num">毛利率</th><th class="num">折扣</th><th>异常原因</th></tr></thead>' +
       '<tbody><tr><td colspan="10" class="empty">当前筛选下无此类异常订单</td></tr></tbody>';
     return;
   }
@@ -998,6 +960,7 @@ function renderAbnormal(rows) {
 /* ============================================================
  * 刷新
  * ============================================================ */
+// 读取筛选 → 计算视图 → 渲染全部模块
 function refresh() {
   const filters = readFilters();
   const view = computeView(filters);
@@ -1011,7 +974,8 @@ function refresh() {
   renderChannel(view.channels);
   renderGauge(view.kpi.completion_rate, view.kpi.sales, view.kpi.target_sales, view.completionDisabled);
   renderCustomerLevel(view.customerLevels);
-  renderDiscountHealth(view.discountBuckets, view.refundBuckets);
+  renderBuckets('chartDiscountHealth', view.discountBuckets, '折扣分桶', '#2563eb', 'rgba(37,99,235,.15)');
+  renderBuckets('chartRefundHealth', view.refundBuckets, '退款分桶', '#dc2626', 'rgba(220,38,38,.15)');
   renderChannelCategoryHeat(view.channelCategoryMatrix);
   renderCustomerTable(view.customers);
   renderInventory(filters);
@@ -1022,7 +986,7 @@ function refresh() {
  * 初始化
  * ============================================================ */
 window.addEventListener('resize', () => {
-  Object.values(STATE.charts).forEach(c => c && c.resize());
+  Object.values(STATE.charts).forEach(c => c.resize());
 });
 
 (async function init() {
