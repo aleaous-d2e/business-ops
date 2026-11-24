@@ -837,9 +837,9 @@ function renderChannelCategoryHeat(matrix) {
     visualMap: {
       min: Math.min(min, 0), max: Math.max(max, 0.3),
       calculable: false, orient: 'horizontal', left: 'center', bottom: 8,
-      itemWidth: 120, itemHeight: 12,
       text: ['高毛利', '低毛利'],
       textStyle: { color: C_AUX, fontWeight: 500, fontSize: 11.5, fontFamily: FONT },
+      // 移除 itemWidth 和 itemHeight，解决部分情况下渲染为垂直异常柱的问题
       inRange: { color: ['#dc2626', '#f59e0b', '#fbbf24', '#86efac', '#16a34a'] },
     },
     series: [{
